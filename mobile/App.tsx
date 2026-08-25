@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
-import * as MediaLibrary from "expo-media-library";
+import * as MediaLibrary from "expo-media-library/legacy";
 import { PermissionScreen } from "./src/screens/PermissionScreen";
 import { ScanScreen } from "./src/screens/ScanScreen";
 import { MapScreen } from "./src/screens/MapScreen";

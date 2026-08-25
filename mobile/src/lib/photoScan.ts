@@ -1,4 +1,4 @@
-import * as MediaLibrary from "expo-media-library";
+import * as MediaLibrary from "expo-media-library/legacy";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { TrackPoint } from "./geo";
 
@@ -69,15 +69,17 @@ export async function scanPhotoLibrary(
       try {
         const info = await MediaLibrary.getAssetInfoAsync(asset, { shouldDownloadFromNetwork: false });
         const loc = info.location;
+        // iOS 네이티브 모듈이 좌표를 문자열로 넘기는 경우가 있어 반드시 숫자로 변환한다
+        const lat = loc ? Number(loc.latitude) : NaN;
+        const lng = loc ? Number(loc.longitude) : NaN;
         if (
-          loc &&
-          Number.isFinite(loc.latitude) && Math.abs(loc.latitude) <= 90 &&
-          Number.isFinite(loc.longitude) && Math.abs(loc.longitude) <= 180 &&
-          !(loc.latitude === 0 && loc.longitude === 0)
+          Number.isFinite(lat) && Math.abs(lat) <= 90 &&
+          Number.isFinite(lng) && Math.abs(lng) <= 180 &&
+          !(lat === 0 && lng === 0)
         ) {
           points.push({
-            lat: loc.latitude,
-            lng: loc.longitude,
+            lat,
+            lng,
             t: asset.creationTime || asset.modificationTime,
             photoId: asset.id,
           });

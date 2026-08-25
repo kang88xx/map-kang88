@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Alert, Linking, Pressable, StyleSheet, Text, View } from "react-native";
-import * as MediaLibrary from "expo-media-library";
+import * as MediaLibrary from "expo-media-library/legacy";
 import { C } from "../theme";
 
 export function PermissionScreen({ onGranted }: { onGranted: () => void }) {
