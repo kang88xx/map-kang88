@@ -4,7 +4,7 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Feature, FeatureCollection } from "geojson";
 import { parseFile, parsePhotosTakeoutJson } from "@/lib/parse";
-import { buildSegments, buildVisitRoute, haversineKm, totalDistanceKm } from "@/lib/geo";
+import { buildSegments, buildVisitRoute, totalDistanceKm } from "@/lib/geo";
 import { generateSample } from "@/lib/sample";
 import { runPlayback, type PlaybackHandle, type PlaybackInfo } from "@/lib/playback";
 import type { TrackPoint } from "@/lib/types";
@@ -24,14 +24,9 @@ const dayStr = (t: number) => {
 };
 
 const MAX_RENDER_POINTS = 20000;
-const LIVE_STORAGE_KEY = "kang-map-live";
-const LIVE_MIN_METERS = 15;
-const LIVE_MIN_MS = 30_000;
 
 export default function Home() {
   const [points, setPoints] = useState<TrackPoint[]>([]);
-  const [livePoints, setLivePoints] = useState<TrackPoint[]>([]);
-  const [tracking, setTracking] = useState(false);
   const [files, setFiles] = useState<LoadedFile[]>([]);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
@@ -41,8 +36,6 @@ export default function Home() {
   const [sheetOpen, setSheetOpen] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
   const dirInputRef = useRef<HTMLInputElement>(null);
-  const watchIdRef = useRef<number | null>(null);
-  const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null);
 
   const srcSeqRef = useRef(0);
   const addPoints = useCallback((added: TrackPoint[], file: LoadedFile | null) => {
@@ -61,115 +54,6 @@ export default function Home() {
     setFrom("");
     setTo("");
   }, []);
-
-  // 실시간 기록: 이 브라우저에 저장된 기록 복원/저장 (손상된 저장값 방어)
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(LIVE_STORAGE_KEY);
-      if (!raw) return;
-      const parsed: unknown = JSON.parse(raw);
-      if (!Array.isArray(parsed)) return;
-      const clean = parsed.filter((p): p is TrackPoint => {
-        if (typeof p !== "object" || p === null) return false;
-        const q = p as TrackPoint;
-        return (
-          q.kind === "path" &&
-          Number.isFinite(q.lat) && Math.abs(q.lat) <= 90 &&
-          Number.isFinite(q.lng) && Math.abs(q.lng) <= 180 &&
-          !(q.lat === 0 && q.lng === 0) &&
-          Number.isFinite(q.t)
-        );
-      });
-      if (clean.length > 0) setLivePoints(clean);
-    } catch {}
-  }, []);
-  useEffect(() => {
-    if (livePoints.length === 0) return;
-    try {
-      localStorage.setItem(LIVE_STORAGE_KEY, JSON.stringify(livePoints));
-    } catch {}
-  }, [livePoints]);
-
-  const acquireWakeLock = useCallback(async () => {
-    try {
-      const nav = navigator as Navigator & {
-        wakeLock?: { request: (type: "screen") => Promise<{ release: () => Promise<void> }> };
-      };
-      const lock = (await nav.wakeLock?.request("screen")) ?? null;
-      // 요청이 완료되기 전에 추적이 중지됐다면 바로 해제 (비동기 누수 방지)
-      if (watchIdRef.current == null) {
-        lock?.release().catch(() => {});
-        return;
-      }
-      wakeLockRef.current?.release().catch(() => {}); // 이전 잠금 교체 시 누수 방지
-      wakeLockRef.current = lock;
-    } catch {}
-  }, []);
-
-  const stopTracking = useCallback(() => {
-    if (watchIdRef.current != null) navigator.geolocation.clearWatch(watchIdRef.current);
-    watchIdRef.current = null;
-    wakeLockRef.current?.release().catch(() => {});
-    wakeLockRef.current = null;
-    setTracking(false);
-  }, []);
-
-  const startTracking = useCallback(() => {
-    setError(null);
-    if (watchIdRef.current != null) return; // 이미 추적 중 — 중복 watch 방지
-    if (!("geolocation" in navigator)) {
-      setError("이 브라우저는 위치 정보를 지원하지 않습니다.");
-      return;
-    }
-    if (!window.isSecureContext) {
-      setError(
-        "위치 기록은 HTTPS에서만 동작합니다. 폰에서 쓰려면 배포된 주소(https)로 접속해 주세요.",
-      );
-      return;
-    }
-    watchIdRef.current = navigator.geolocation.watchPosition(
-      (pos) => {
-        const p: TrackPoint = {
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-          t: pos.timestamp,
-          kind: "path",
-        };
-        setLivePoints((prev) => {
-          const last = prev[prev.length - 1];
-          if (last) {
-            const meters = haversineKm(last, p) * 1000;
-            if (meters < LIVE_MIN_METERS && p.t - last.t < LIVE_MIN_MS) return prev;
-          }
-          return [...prev, p];
-        });
-      },
-      (err) => {
-        setError(`위치 정보를 가져오지 못했습니다: ${err.message}`);
-        stopTracking();
-      },
-      { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 },
-    );
-    setTracking(true);
-    acquireWakeLock();
-  }, [acquireWakeLock, stopTracking]);
-
-  // 화면이 다시 보이면 wake lock 재획득, 언마운트 시 정리
-  useEffect(() => {
-    const onVisible = () => {
-      if (tracking && document.visibilityState === "visible") acquireWakeLock();
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
-  }, [tracking, acquireWakeLock]);
-
-  const clearLive = useCallback(() => {
-    stopTracking();
-    setLivePoints([]);
-    try {
-      localStorage.removeItem(LIVE_STORAGE_KEY);
-    } catch {}
-  }, [stopTracking]);
 
   /* 경로 재생 + 영상 저장 */
   const mapInstRef = useRef<MLMap | null>(null);
@@ -248,12 +132,6 @@ export default function Home() {
   // 언마운트 시 위치 추적·웨이크락·재생을 정리
   useEffect(() => {
     return () => {
-      if (watchIdRef.current != null) {
-        navigator.geolocation.clearWatch(watchIdRef.current);
-        watchIdRef.current = null; // 진행 중이던 wake lock 요청이 이 값을 보고 스스로 해제하게
-      }
-      wakeLockRef.current?.release().catch(() => {});
-      wakeLockRef.current = null;
       playTokenRef.current = null;
       playHandleRef.current?.stop();
     };
@@ -390,10 +268,7 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [from, to]);
 
-  const merged = useMemo(
-    () => [...points, ...livePoints].sort((a, b) => a.t - b.t),
-    [points, livePoints],
-  );
+  const merged = points;
 
   // 데이터가 처음 생기면 기간을 전체 범위로 초기화
   useEffect(() => {
@@ -444,7 +319,7 @@ export default function Home() {
     const usingVisitRoute = pathPoints.length < 2;
     const routeSource = usingVisitRoute ? filtered : pathPoints;
     const segmenter = usingVisitRoute ? buildVisitRoute : buildSegments;
-    // 소스(파일·실시간)별로 나눠 세그먼트를 만들어야 동시대의 다른 기록이 지그재그로 섞이지
+    // 소스(파일)별로 나눠 세그먼트를 만들어야 동시대의 다른 기록이 지그재그로 섞이지
     // 않고, 결과는 시작 시각순으로 정렬해 재생이 시간을 거슬러 달리지 않게 한다
     const groups = new Map<number | undefined, TrackPoint[]>();
     for (const p of routeSource) {
@@ -646,50 +521,6 @@ export default function Home() {
             {scanning}
           </p>
         )}
-
-        <section
-          className="rounded-xl border border-zinc-800 bg-zinc-900 p-4"
-          style={{ order: merged.length > 0 ? 8 : 0 }} // 데이터가 있으면 핵심 워크플로 아래로
-        >
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-zinc-200">📍 실시간 기록</h2>
-            {tracking && (
-              <span className="flex items-center gap-1.5 text-xs text-emerald-400">
-                <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
-                기록 중
-              </span>
-            )}
-          </div>
-          <p className="mt-1 text-xs text-zinc-400">
-            페이지가 열려 있는 동안 현재 위치를 기록해 지도에 그립니다. 기록은 이 브라우저에만
-            저장됩니다.
-          </p>
-          <div className="mt-3 flex gap-2">
-            <button
-              onClick={tracking ? stopTracking : startTracking}
-              className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium ${
-                tracking
-                  ? "bg-rose-600 hover:bg-rose-500"
-                  : "border border-emerald-700 text-emerald-300 hover:bg-emerald-950/60"
-              }`}
-            >
-              {tracking ? "기록 중지" : "기록 시작"}
-            </button>
-            {livePoints.length > 0 && (
-              <button
-                onClick={clearLive}
-                className="rounded-lg border border-zinc-700 px-3 py-2 text-xs text-zinc-400 hover:bg-zinc-800"
-              >
-                기록 지우기
-              </button>
-            )}
-          </div>
-          {livePoints.length > 0 && (
-            <p className="mt-2 text-xs text-zinc-400">
-              저장된 포인트 {livePoints.length.toLocaleString()}개
-            </p>
-          )}
-        </section>
 
         {error && (
           <p className="rounded-lg border border-rose-800 bg-rose-950/50 p-3 text-sm text-rose-300">
