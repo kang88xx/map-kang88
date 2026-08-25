@@ -1,0 +1,54 @@
+{
+  "expo": {
+    "name": "kang-map",
+    "slug": "kang-map",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0C1424",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "io.kang88.kangmap",
+      "buildNumber": "1",
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "사진의 위치 정보와 촬영 시각만 읽어 과거 이동 경로를 지도에 그립니다. 사진 원본은 어디에도 업로드되지 않습니다.",
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "package": "io.kang88.kangmap",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "backgroundColor": "#0C1424",
+        "foregroundImage": "./assets/android-icon-foreground.png"
+      },
+      "permissions": [
+        "android.permission.READ_MEDIA_IMAGES"
+      ],
+      "predictiveBackGestureEnabled": false
+    },
+    "plugins": [
+      "@maplibre/maplibre-react-native",
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "사진의 위치 정보와 촬영 시각만 읽어 과거 이동 경로를 지도에 그립니다.",
+          "savePhotosPermission": false,
+          "isAccessMediaLocationEnabled": true
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#0C1424"
+        }
+      ]
+    ],
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}
