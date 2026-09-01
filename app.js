@@ -3,17 +3,15 @@ import { layout, prepare } from "./vendor/pretext.js";
 import {
   DEFAULT_VIEW,
   SEOUL_BOUNDS,
+  buildCctvOpenUrl,
   buildSearchUrl,
   buildShareUrl,
   normalizeQuery,
   parseSearchResult,
   parseViewState,
-  remainingSearchDelay,
 } from "./prototype-core.js";
 
 const initialView = parseViewState(window.location.search);
-const searchCache = new Map();
-let lastSearchStartedAt = 0;
 let activeMarker = null;
 let activePopup = null;
 let activePlace = null;
@@ -139,8 +137,8 @@ elements.cctvLayerButton.addEventListener("click", () => {
 
 elements.cameraCloseButton.addEventListener("click", hideCameraPanel);
 elements.cameraOpenButton.addEventListener("click", () => {
-  const mediaUrl = elements.cameraOpenButton.dataset.mediaUrl;
-  if (mediaUrl) window.open(mediaUrl, "_blank", "noopener,noreferrer");
+  const openUrl = elements.cameraOpenButton.dataset.openUrl;
+  if (openUrl) window.open(openUrl, "_blank", "noopener,noreferrer");
 });
 
 elements.weatherLayerButton.addEventListener("click", () => {
@@ -153,6 +151,8 @@ elements.weatherCloseButton.addEventListener("click", () => setWeatherPanelExpan
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     setSheetExpanded(false);
+    setWeatherPanelExpanded(false);
+    hideCameraPanel();
     hideResults();
   }
 });
@@ -165,31 +165,20 @@ async function searchPlace(rawQuery) {
     return;
   }
 
-  const cacheKey = query.toLocaleLowerCase("ko-KR");
-  if (searchCache.has(cacheKey)) {
-    const cachedResults = searchCache.get(cacheKey);
-    handleSearchResults(cachedResults, true);
-    return;
-  }
-
   setSearching(true);
-  setSearchStatus("서울 안에서 장소를 찾고 있습니다.");
+  setSearchStatus("공식 프록시로 서울 안의 장소를 찾고 있습니다.");
   hideResults();
 
-  const waitMs = remainingSearchDelay(lastSearchStartedAt);
-  if (waitMs > 0) await new Promise((resolve) => window.setTimeout(resolve, waitMs));
-  lastSearchStartedAt = Date.now();
-
   try {
-    const response = await fetch(buildSearchUrl(query), {
+    const response = await fetch(buildSearchUrl(query, window.location.origin), {
       headers: { Accept: "application/json" },
       signal: AbortSignal.timeout(8000),
     });
     if (!response.ok) throw new Error(`Search failed with HTTP ${response.status}`);
     const payload = await response.json();
-    const results = Array.isArray(payload) ? payload.map(parseSearchResult).filter(Boolean) : [];
-    searchCache.set(cacheKey, results);
-    handleSearchResults(results, false);
+    const rawResults = Array.isArray(payload?.results) ? payload.results : Array.isArray(payload) ? payload : [];
+    const results = rawResults.map(parseSearchResult).filter(Boolean);
+    handleSearchResults(results);
   } catch {
     setSearchStatus("검색 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.", "error");
   } finally {
@@ -197,7 +186,7 @@ async function searchPlace(rawQuery) {
   }
 }
 
-function handleSearchResults(results, fromCache) {
+function handleSearchResults(results) {
   if (!results.length) {
     setSearchStatus("서울 안에서 일치하는 장소를 찾지 못했습니다.", "error");
     hideResults();
@@ -206,7 +195,7 @@ function handleSearchResults(results, fromCache) {
 
   renderResults(results);
   selectPlace(results[0]);
-  setSearchStatus(`${results.length}개 결과${fromCache ? " · 저장된 검색 사용" : ""}`);
+  setSearchStatus(`${results.length}개 결과 · 서버 검증 검색`);
 }
 
 function renderResults(results) {
@@ -371,7 +360,7 @@ async function loadCctvLayer() {
           geometry: { type: "Point", coordinates: [camera.longitude, camera.latitude] },
           properties: {
             name: camera.name,
-            mediaUrl: camera.mediaUrl,
+            id: camera.id,
             mediaHost: camera.mediaHost,
             format: camera.format,
             resolution: camera.resolution,
@@ -455,18 +444,19 @@ function setCctvVisibility(visible) {
 
 function showCameraPanel(camera) {
   setWeatherPanelExpanded(false);
+  const openUrl = buildCctvOpenUrl(camera.id, window.location.origin);
   elements.cameraName.textContent = camera.name || "교통 CCTV";
   elements.cameraFormat.textContent = [camera.format, camera.resolution].filter(Boolean).join(" · ");
   elements.cameraObservedAt.textContent = camera.observedAt || "시각 정보 없음";
   elements.cameraSource.textContent = camera.mediaHost ? `영상 제공처: ${camera.mediaHost}` : "영상 제공처 정보 없음";
-  elements.cameraOpenButton.dataset.mediaUrl = camera.mediaUrl || "";
-  elements.cameraOpenButton.disabled = !camera.mediaUrl;
+  elements.cameraOpenButton.dataset.openUrl = openUrl?.toString() ?? "";
+  elements.cameraOpenButton.disabled = !openUrl;
   elements.cameraPanel.hidden = false;
 }
 
 function hideCameraPanel() {
   elements.cameraPanel.hidden = true;
-  elements.cameraOpenButton.dataset.mediaUrl = "";
+  elements.cameraOpenButton.dataset.openUrl = "";
 }
 
 async function loadWeatherPreview() {

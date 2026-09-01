@@ -13,7 +13,8 @@ export const DEFAULT_VIEW = Object.freeze({
 });
 
 export const VALID_LAYERS = new Set(["auto", "weather", "imagery", "traffic"]);
-export const NOMINATIM_ENDPOINT = "https://nominatim.openstreetmap.org/search";
+export const SEARCH_ENDPOINT = "/api/search";
+export const CCTV_OPEN_ENDPOINT = "/api/cctv/open";
 export const SEARCH_INTERVAL_MS = 1100;
 
 export function clamp(value, min, max) {
@@ -67,31 +68,32 @@ export function buildShareUrl(baseUrl, viewState) {
   return url;
 }
 
-export function buildSearchUrl(query) {
+export function buildSearchUrl(query, baseUrl = "http://127.0.0.1") {
   const normalizedQuery = normalizeQuery(query);
-  const url = new URL(NOMINATIM_ENDPOINT);
-  url.searchParams.set("format", "jsonv2");
+  const url = new URL(SEARCH_ENDPOINT, baseUrl);
   url.searchParams.set("q", normalizedQuery);
-  url.searchParams.set("limit", "5");
-  url.searchParams.set("countrycodes", "kr");
-  url.searchParams.set(
-    "viewbox",
-    `${SEOUL_BOUNDS.west},${SEOUL_BOUNDS.north},${SEOUL_BOUNDS.east},${SEOUL_BOUNDS.south}`,
-  );
-  url.searchParams.set("bounded", "1");
-  url.searchParams.set("accept-language", "ko");
+  return url;
+}
+
+export function buildCctvOpenUrl(cameraId, baseUrl = "http://127.0.0.1") {
+  const id = String(cameraId ?? "").trim();
+  if (!id) return null;
+  const url = new URL(CCTV_OPEN_ENDPOINT, baseUrl);
+  url.searchParams.set("id", id);
   return url;
 }
 
 export function parseSearchResult(rawResult) {
-  const latitude = Number(rawResult?.lat);
-  const longitude = Number(rawResult?.lon);
-  const displayName = typeof rawResult?.display_name === "string" ? rawResult.display_name.trim() : "";
+  const latitude = Number(rawResult?.latitude ?? rawResult?.lat);
+  const longitude = Number(rawResult?.longitude ?? rawResult?.lon);
+  const displayName = normalizeText(rawResult?.displayName ?? rawResult?.display_name);
+  const shortName = normalizeText(rawResult?.shortName) || displayName.split(",")[0].trim();
 
   if (
     !Number.isFinite(latitude)
     || !Number.isFinite(longitude)
     || !displayName
+    || !shortName
     || latitude < SEOUL_BOUNDS.south
     || latitude > SEOUL_BOUNDS.north
     || longitude < SEOUL_BOUNDS.west
@@ -100,17 +102,27 @@ export function parseSearchResult(rawResult) {
     return null;
   }
 
-  const boundingBox = parseBoundingBox(rawResult?.boundingbox);
+  const boundingBox = parseBoundingBox(rawResult?.boundingBox ?? rawResult?.boundingbox);
   return {
     latitude,
     longitude,
     displayName,
-    shortName: displayName.split(",")[0].trim(),
+    shortName,
     boundingBox,
   };
 }
 
 export function parseBoundingBox(rawBoundingBox) {
+  if (Array.isArray(rawBoundingBox) && rawBoundingBox.length === 2) {
+    const [[west, south], [east, north]] = rawBoundingBox.map((point) => Array.isArray(point) ? point.map(Number) : []);
+    if (![south, north, west, east].every(Number.isFinite)) return null;
+    if (south > north || west > east) return null;
+    return [
+      [clamp(west, SEOUL_BOUNDS.west, SEOUL_BOUNDS.east), clamp(south, SEOUL_BOUNDS.south, SEOUL_BOUNDS.north)],
+      [clamp(east, SEOUL_BOUNDS.west, SEOUL_BOUNDS.east), clamp(north, SEOUL_BOUNDS.south, SEOUL_BOUNDS.north)],
+    ];
+  }
+
   if (!Array.isArray(rawBoundingBox) || rawBoundingBox.length !== 4) return null;
   const [south, north, west, east] = rawBoundingBox.map(Number);
   if (![south, north, west, east].every(Number.isFinite)) return null;
@@ -120,6 +132,10 @@ export function parseBoundingBox(rawBoundingBox) {
     [clamp(west, SEOUL_BOUNDS.west, SEOUL_BOUNDS.east), clamp(south, SEOUL_BOUNDS.south, SEOUL_BOUNDS.north)],
     [clamp(east, SEOUL_BOUNDS.west, SEOUL_BOUNDS.east), clamp(north, SEOUL_BOUNDS.south, SEOUL_BOUNDS.north)],
   ];
+}
+
+function normalizeText(value) {
+  return typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "";
 }
 
 export function remainingSearchDelay(lastStartedAt, now = Date.now()) {

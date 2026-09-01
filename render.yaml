@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: map-kang88
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeployTrigger: commit
+    envVars:
+      - key: NODE_VERSION
+        value: 24.20.0
+      - key: HOST
+        value: 0.0.0.0
+      - key: ITS_CCTV_API_KEY
+        sync: false
+      - key: KMA_API_AUTH_KEY
+        sync: false
+      - key: NGII_WMTS_API_KEY
+        sync: false
+

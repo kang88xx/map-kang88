@@ -4,6 +4,7 @@
 .omx/
 node_modules/
 npm-debug.log*
+.cache/
 .env
 .env.*
 !.env.example

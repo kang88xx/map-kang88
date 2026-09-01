@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 export const CCTV_BOUNDS = Object.freeze({ west: 126.76, south: 37.42, east: 127.18, north: 37.7 });
+export const CCTV_MEDIA_HOST_ALLOWLIST = new Set(["cctvsec.ktict.co.kr"]);
 
 export function normalizeItsPayload(payload) {
   const response = payload?.response ?? payload;
@@ -48,6 +49,7 @@ export function normalizeMediaUrl(rawUrl) {
   try {
     const url = new URL(rawUrl);
     if (url.protocol !== "https:") return null;
+    if (!CCTV_MEDIA_HOST_ALLOWLIST.has(url.host)) return null;
     return { url: url.toString(), host: url.host };
   } catch {
     return null;

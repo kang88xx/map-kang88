@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=24.12 <25"
+  },
   "description": "A truthful Seoul map prototype with explicit place search and shareable view state.",
   "scripts": {
     "start": "node server.js",

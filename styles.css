@@ -617,7 +617,7 @@ a:focus-visible {
   .search-provider { margin-top: 6px; }
   .search-results { max-height: min(132px, 18dvh); }
   .map-hud {
-    top: 82px;
+    top: 112px;
     right: 12px;
     min-width: 150px;
     padding: 8px 10px;
@@ -650,7 +650,7 @@ a:focus-visible {
 }
 
 @media (max-width: 420px) {
-  .map-hud { top: 78px; }
+  .map-hud { top: 112px; }
   .hud-coordinates { display: none; }
   .source-warning { font-size: 10px; }
 }

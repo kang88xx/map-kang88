@@ -2,17 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  CCTV_OPEN_ENDPOINT,
   DEFAULT_VIEW,
-  NOMINATIM_ENDPOINT,
-  SEARCH_INTERVAL_MS,
+  SEARCH_ENDPOINT,
   SEOUL_BOUNDS,
+  buildCctvOpenUrl,
   buildSearchUrl,
   buildShareUrl,
   normalizeQuery,
   parseBoundingBox,
   parseSearchResult,
   parseViewState,
-  remainingSearchDelay,
 } from "../prototype-core.js";
 
 test("parseViewState restores a valid Seoul map URL", () => {
@@ -48,16 +48,11 @@ test("buildShareUrl emits only the P0 view contract", () => {
   assert.equal(url.searchParams.has("camera"), false);
 });
 
-test("buildSearchUrl creates one bounded Korean Nominatim request", () => {
-  const url = buildSearchUrl("  서울역  ");
-  assert.equal(url.origin + url.pathname, NOMINATIM_ENDPOINT);
+test("buildSearchUrl creates a same-origin search proxy request only", () => {
+  const url = buildSearchUrl("  서울역  ", "https://map.kang88.io/demo?old=1#hash");
+  assert.equal(url.origin + url.pathname, `https://map.kang88.io${SEARCH_ENDPOINT}`);
   assert.equal(url.searchParams.get("q"), "서울역");
-  assert.equal(url.searchParams.get("format"), "jsonv2");
-  assert.equal(url.searchParams.get("limit"), "5");
-  assert.equal(url.searchParams.get("countrycodes"), "kr");
-  assert.equal(url.searchParams.get("bounded"), "1");
-  assert.equal(url.searchParams.get("accept-language"), "ko");
-  assert.equal(url.searchParams.get("viewbox"), "126.76,37.7,127.18,37.42");
+  assert.equal([...url.searchParams.keys()].join(","), "q");
 });
 
 test("normalizeQuery removes surrounding and repeated whitespace", () => {
@@ -73,6 +68,23 @@ test("parseSearchResult accepts a safe Seoul result", () => {
   });
   assert.equal(result.shortName, "서울역");
   assert.deepEqual(result.boundingBox, [[126.968, 37.553], [126.974, 37.556]]);
+});
+
+test("parseSearchResult accepts server-normalized search results", () => {
+  const result = parseSearchResult({
+    latitude: 37.5547,
+    longitude: 126.9707,
+    displayName: "서울역, 중구, 서울특별시, 대한민국",
+    shortName: "서울역",
+    boundingBox: [[126.968, 37.553], [126.974, 37.556]],
+  });
+  assert.deepEqual(result, {
+    latitude: 37.5547,
+    longitude: 126.9707,
+    displayName: "서울역, 중구, 서울특별시, 대한민국",
+    shortName: "서울역",
+    boundingBox: [[126.968, 37.553], [126.974, 37.556]],
+  });
 });
 
 test("parseSearchResult rejects malformed or out-of-Seoul results", () => {
@@ -91,8 +103,14 @@ test("parseBoundingBox rejects malformed input and clamps valid bounds", () => {
   );
 });
 
-test("remainingSearchDelay enforces the public one-request-per-second budget", () => {
-  assert.equal(remainingSearchDelay(1000, 1000), SEARCH_INTERVAL_MS);
-  assert.equal(remainingSearchDelay(1000, 1600), 500);
-  assert.equal(remainingSearchDelay(1000, 2200), 0);
+test("buildCctvOpenUrl opens only the same-origin camera id endpoint", () => {
+  const url = buildCctvOpenUrl(" cam 01 ", "https://map.kang88.io/?token=secret");
+  assert.equal(url.origin + url.pathname, `https://map.kang88.io${CCTV_OPEN_ENDPOINT}`);
+  assert.equal(url.searchParams.get("id"), "cam 01");
+  assert.equal([...url.searchParams.keys()].join(","), "id");
+  assert.equal(url.toString().includes("secret"), false);
+});
+
+test("buildCctvOpenUrl rejects empty camera ids", () => {
+  assert.equal(buildCctvOpenUrl("   "), null);
 });
