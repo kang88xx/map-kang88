@@ -14,7 +14,7 @@ export function normalizeItsPayload(payload) {
   };
 }
 
-export function normalizeCamera(raw, index) {
+export function normalizeCamera(raw) {
   const name = typeof raw?.cctvname === "string" ? raw.cctvname.replace(/;+$/, "").trim() : "";
   const longitude = Number(String(raw?.coordx ?? "").replace(/;+$/, ""));
   const latitude = Number(String(raw?.coordy ?? "").replace(/;+$/, ""));
@@ -30,9 +30,15 @@ export function normalizeCamera(raw, index) {
     || !media
   ) return null;
 
-  const identity = `${name}|${longitude.toFixed(6)}|${latitude.toFixed(6)}|${index}`;
+  const identity = [
+    name,
+    longitude.toFixed(6),
+    latitude.toFixed(6),
+    typeof raw?.cctvformat === "string" ? raw.cctvformat : "",
+    media.host,
+  ].join("|");
   return {
-    id: createHash("sha256").update(identity).digest("hex").slice(0, 16),
+    id: createHash("sha256").update(identity).digest("hex").slice(0, 24),
     name,
     longitude,
     latitude,

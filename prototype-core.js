@@ -15,7 +15,6 @@ export const DEFAULT_VIEW = Object.freeze({
 export const VALID_LAYERS = new Set(["auto", "weather", "imagery", "traffic"]);
 export const SEARCH_ENDPOINT = "/api/search";
 export const CCTV_OPEN_ENDPOINT = "/api/cctv/open";
-export const SEARCH_INTERVAL_MS = 1100;
 
 export function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -83,6 +82,49 @@ export function buildCctvOpenUrl(cameraId, baseUrl = "http://127.0.0.1") {
   return url;
 }
 
+export function buildCctvStatus(payload, featureCount) {
+  const count = Number.isFinite(Number(payload?.count)) ? Number(payload.count) : featureCount;
+  if (payload?.stale === true) {
+    return {
+      stale: true,
+      dotClass: "stale",
+      ariaLabel: "지연됨",
+      text: `캐시된 ${count}개 · 공급자 응답 지연`,
+      warning: "CCTV 공급자 응답이 지연되어 캐시된 위치를 표시합니다. 위성 레이어는 지도 정합 검증 중입니다.",
+    };
+  }
+
+  return {
+    stale: false,
+    dotClass: "connected",
+    ariaLabel: "연결됨",
+    text: `${count}개 · 확대 13 이상에서 표시`,
+    warning: null,
+  };
+}
+
+export function buildWeatherStatus(payload, observedAtText) {
+  if (payload?.stale === true) {
+    return {
+      stale: true,
+      dotClass: "stale",
+      ariaLabel: "지연됨",
+      observedAtText: `${observedAtText} · 지연됨`,
+      text: `${observedAtText} · 지연됨`,
+      warning: "기상청 응답이 지연되어 캐시된 위성영상을 표시합니다.",
+    };
+  }
+
+  return {
+    stale: false,
+    dotClass: "connected",
+    ariaLabel: "연결됨",
+    observedAtText,
+    text: `${observedAtText} · 미리보기`,
+    warning: null,
+  };
+}
+
 export function parseSearchResult(rawResult) {
   const latitude = Number(rawResult?.latitude ?? rawResult?.lat);
   const longitude = Number(rawResult?.longitude ?? rawResult?.lon);
@@ -136,8 +178,4 @@ export function parseBoundingBox(rawBoundingBox) {
 
 function normalizeText(value) {
   return typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "";
-}
-
-export function remainingSearchDelay(lastStartedAt, now = Date.now()) {
-  return Math.max(0, SEARCH_INTERVAL_MS - (now - lastStartedAt));
 }

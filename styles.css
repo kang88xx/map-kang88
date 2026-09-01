@@ -170,6 +170,10 @@ a { color: inherit; }
   background: var(--accent);
   box-shadow: 0 0 0 3px rgba(200, 255, 92, .12);
 }
+.status-dot.stale {
+  background: var(--warning);
+  box-shadow: 0 0 0 3px rgba(255, 180, 84, .14);
+}
 .status-dot.error { background: var(--danger); }
 
 .signal-note {

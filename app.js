@@ -4,14 +4,18 @@ import {
   DEFAULT_VIEW,
   SEOUL_BOUNDS,
   buildCctvOpenUrl,
+  buildCctvStatus,
   buildSearchUrl,
   buildShareUrl,
+  buildWeatherStatus,
   normalizeQuery,
   parseSearchResult,
   parseViewState,
 } from "./prototype-core.js";
 
 const initialView = parseViewState(window.location.search);
+const DEFAULT_SOURCE_WARNING = "CCTV는 공식 ITS 원본 링크를 사용합니다. 위성 레이어는 지도 정합 검증 중입니다.";
+const sourceWarnings = new Map();
 let activeMarker = null;
 let activePopup = null;
 let activePlace = null;
@@ -421,14 +425,13 @@ async function loadCctvLayer() {
       map.on("mouseleave", layerId, () => { map.getCanvas().style.cursor = ""; });
     }
 
+    const status = buildCctvStatus(payload, features.length);
     elements.cctvLayerButton.disabled = false;
-    elements.cctvStatusDot.classList.add("connected");
-    elements.cctvStatusDot.setAttribute("aria-label", "연결됨");
-    elements.cctvStatusText.textContent = `${payload.count ?? features.length}개 · 확대 13 이상에서 표시`;
-    elements.sourceWarningText.textContent = "CCTV는 공식 ITS 원본 링크를 사용합니다. 위성 레이어는 지도 정합 검증 중입니다.";
+    setStatusDot(elements.cctvStatusDot, status);
+    elements.cctvStatusText.textContent = status.text;
+    setSourceWarning("cctv", status.warning);
   } catch {
-    elements.cctvStatusDot.classList.add("error");
-    elements.cctvStatusDot.setAttribute("aria-label", "연결 실패");
+    setStatusDot(elements.cctvStatusDot, { dotClass: "error", ariaLabel: "연결 실패" });
     elements.cctvStatusText.textContent = "현재 CCTV를 불러올 수 없음";
   }
 }
@@ -467,17 +470,33 @@ async function loadWeatherPreview() {
     });
     if (!response.ok) throw new Error(`KMA HTTP ${response.status}`);
     const payload = await response.json();
-    elements.weatherObservedAt.textContent = formatKmaTimestamp(payload.observedAt);
+    const observedAtText = formatKmaTimestamp(payload.observedAt);
+    const status = buildWeatherStatus(payload, observedAtText);
+    elements.weatherObservedAt.textContent = status.observedAtText;
     elements.weatherImage.src = payload.imageUrl;
     elements.weatherLayerButton.disabled = false;
-    elements.weatherStatusDot.classList.add("connected");
-    elements.weatherStatusDot.setAttribute("aria-label", "연결됨");
-    elements.weatherStatusText.textContent = `${formatKmaTimestamp(payload.observedAt)} · 미리보기`;
+    setStatusDot(elements.weatherStatusDot, status);
+    elements.weatherStatusText.textContent = status.text;
+    setSourceWarning("weather", status.warning);
   } catch {
-    elements.weatherStatusDot.classList.add("error");
-    elements.weatherStatusDot.setAttribute("aria-label", "연결 실패");
+    setStatusDot(elements.weatherStatusDot, { dotClass: "error", ariaLabel: "연결 실패" });
     elements.weatherStatusText.textContent = "현재 위성영상을 불러올 수 없음";
   }
+}
+
+function setStatusDot(dot, status) {
+  dot.classList.remove("connected", "stale", "error");
+  if (status.dotClass) dot.classList.add(status.dotClass);
+  dot.setAttribute("aria-label", status.ariaLabel);
+}
+
+function setSourceWarning(source, message) {
+  if (message) {
+    sourceWarnings.set(source, message);
+  } else {
+    sourceWarnings.delete(source);
+  }
+  elements.sourceWarningText.textContent = [...sourceWarnings.values()][0] ?? DEFAULT_SOURCE_WARNING;
 }
 
 function setWeatherPanelExpanded(expanded) {

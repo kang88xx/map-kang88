@@ -14,16 +14,39 @@ test("normalizeItsPayload keeps safe HTTPS Seoul cameras only", () => {
   assert.equal(result.cameras[0].name, "서울역");
   assert.equal(result.cameras[0].mediaHost, "cctvsec.ktict.co.kr");
   assert.equal(result.cameras[0].format, "HLS");
-  assert.equal(result.cameras[0].id.length, 16);
+  assert.equal(result.cameras[0].id.length, 24);
 });
 
-test("normalizeItsPayload does not use roadsectionid as the camera id", () => {
+test("normalizeItsPayload uses stable camera ids independent of roadsectionid and order", () => {
   const payload = { response: { data: [
     { roadsectionid: "same", cctvname: "A", coordx: "126.98", coordy: "37.56", cctvurl: "https://cctvsec.ktict.co.kr/a.m3u8" },
     { roadsectionid: "same", cctvname: "B", coordx: "126.99", coordy: "37.57", cctvurl: "https://cctvsec.ktict.co.kr/b.m3u8" },
   ] } };
   const result = normalizeItsPayload(payload);
+  const reordered = normalizeItsPayload({ response: { data: [...payload.response.data].reverse() } });
   assert.notEqual(result.cameras[0].id, result.cameras[1].id);
+  assert.equal(result.cameras[0].id, reordered.cameras[1].id);
+  assert.equal(result.cameras[1].id, reordered.cameras[0].id);
+});
+
+test("normalizeItsPayload keeps camera ids stable when signed media URLs rotate", () => {
+  const first = normalizeItsPayload({ response: { data: [{
+    cctvname: "서울역",
+    coordx: "126.9707",
+    coordy: "37.5547",
+    cctvurl: "https://cctvsec.ktict.co.kr/token-a/live.m3u8?sig=old",
+    cctvformat: "HLS",
+  }] } });
+  const rotated = normalizeItsPayload({ response: { data: [{
+    cctvname: "서울역",
+    coordx: "126.9707",
+    coordy: "37.5547",
+    cctvurl: "https://cctvsec.ktict.co.kr/token-b/live.m3u8?sig=new",
+    cctvformat: "HLS",
+  }] } });
+
+  assert.equal(first.cameras[0].id, rotated.cameras[0].id);
+  assert.notEqual(first.cameras[0].mediaUrl, rotated.cameras[0].mediaUrl);
 });
 
 test("normalizeMediaUrl accepts HTTPS and rejects unsafe values", () => {

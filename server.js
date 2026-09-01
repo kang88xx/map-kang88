@@ -13,9 +13,12 @@ const DEFAULT_HOST = process.env.NODE_ENV === "production" ? "0.0.0.0" : "127.0.
 const ITS_ENDPOINT = "https://openapi.its.go.kr:9443/cctvInfo";
 const NOMINATIM_ENDPOINT = "https://nominatim.openstreetmap.org/search";
 const NOMINATIM_USER_AGENT = "map.kang88.io seoul-now-map-prototype/0.1 (https://map.kang88.io)";
-const CCTV_CACHE_TTL_MS = 5 * 60_000;
+const DEFAULT_CCTV_CACHE_TTL_MS = 60 * 60_000;
+const DEFAULT_CCTV_MAX_UPSTREAM_REFRESHES = 90;
 const SEARCH_CACHE_TTL_MS = 60 * 60_000;
 const SEARCH_INTERVAL_MS = 1_100;
+const SEARCH_CACHE_MAX_ENTRIES = 100;
+const SEARCH_QUEUE_MAX_PENDING = 20;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const KMA_LIST_ENDPOINT = "https://apihub.kma.go.kr/api/typ05/api/GK2A/LE1B/IR105/KO/imageList";
 const KMA_IMAGE_ENDPOINT = "https://apihub.kma.go.kr/api/typ05/api/GK2A/LE1B/IR105/KO/image";
@@ -54,6 +57,20 @@ export async function loadEnvironment() {
 export function publicCamera(camera) {
   const { mediaUrl, ...publicFields } = camera;
   return publicFields;
+}
+
+export function getAppServerStats(server) {
+  return {
+    cctvUpstreamRefreshes: server.appState?.cctvUpstreamRefreshes ?? 0,
+    cctvMaxUpstreamRefreshes: server.appState?.cctvMaxUpstreamRefreshes ?? DEFAULT_CCTV_MAX_UPSTREAM_REFRESHES,
+    cctvRefreshBudgetScope: "process",
+    cctvCacheTtlMs: server.appState?.cctvCacheTtlMs ?? DEFAULT_CCTV_CACHE_TTL_MS,
+  };
+}
+
+function positiveInteger(value, fallback) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function securityHeaders(extra = {}) {
@@ -150,9 +167,52 @@ async function resolveSingleflight(state, key, producer, staleValue) {
   return request;
 }
 
+function ensureRuntimeState(state) {
+  state.searchCache ??= new Map();
+  state.inflight ??= new Map();
+  state.searchQueue ??= [];
+  state.searchQueueActive ??= false;
+  state.now ??= Date.now;
+  state.sleep ??= (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  if (!("lastSearchStartedAt" in state)) state.lastSearchStartedAt = null;
+}
+
+function getCacheEntry(cache, key, ttlMs, now) {
+  const cached = cache.get(key);
+  if (!cached) return null;
+  if (now - cached.createdAt >= ttlMs) {
+    cache.delete(key);
+    return null;
+  }
+  cache.delete(key);
+  cache.set(key, cached);
+  return cached.value;
+}
+
+function setLruCacheEntry(cache, key, value, maxEntries, now) {
+  cache.delete(key);
+  cache.set(key, { createdAt: now, value });
+  while (cache.size > maxEntries) {
+    cache.delete(cache.keys().next().value);
+  }
+}
+
 async function fetchCameras(state, apiKey) {
-  if (state.cctvCache && Date.now() - state.cctvCache.createdAt < CCTV_CACHE_TTL_MS) return state.cctvCache.value;
+  if (state.cctvCache && Date.now() - state.cctvCache.createdAt < state.cctvCacheTtlMs) return state.cctvCache.value;
+  if (state.cctvUpstreamRefreshes >= state.cctvMaxUpstreamRefreshes) {
+    if (state.cctvCache) return { ...state.cctvCache.value, stale: true, warning: "refresh_budget_exhausted" };
+    const error = new Error("CCTV_REFRESH_BUDGET_EXHAUSTED");
+    error.status = 503;
+    throw error;
+  }
   return resolveSingleflight(state, "cctv", async () => {
+    if (state.cctvUpstreamRefreshes >= state.cctvMaxUpstreamRefreshes) {
+      if (state.cctvCache) return { ...state.cctvCache.value, stale: true, warning: "refresh_budget_exhausted" };
+      const error = new Error("CCTV_REFRESH_BUDGET_EXHAUSTED");
+      error.status = 503;
+      throw error;
+    }
+    state.cctvUpstreamRefreshes += 1;
     const url = new URL(ITS_ENDPOINT);
     url.searchParams.set("apiKey", apiKey);
     url.searchParams.set("type", "all");
@@ -187,7 +247,7 @@ async function fetchLatestWeather(state, apiKey) {
     listUrl.searchParams.set("format", "json");
     listUrl.searchParams.set("authKey", apiKey);
     const listPayload = await fetchJson(listUrl, { fetchImpl: state.fetchImpl, label: "KMA_LIST" });
-    const observedAt = findLatestKmaTimestamp(JSON.stringify(listPayload));
+    const observedAt = findLatestKmaTimestamp(listPayload);
     if (!observedAt) throw new Error("KMA_TIMESTAMP_MISSING");
 
     const imageUrl = new URL(KMA_IMAGE_ENDPOINT);
@@ -222,34 +282,66 @@ export function buildNominatimSearchUrl(query) {
 }
 
 async function waitForSearchBudget(state) {
-  const waitMs = Math.max(0, SEARCH_INTERVAL_MS - (Date.now() - state.lastSearchStartedAt));
-  if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
-  state.lastSearchStartedAt = Date.now();
+  const now = state.now();
+  const waitMs = state.lastSearchStartedAt === null ? 0 : Math.max(0, SEARCH_INTERVAL_MS - (now - state.lastSearchStartedAt));
+  if (waitMs > 0) await state.sleep(waitMs);
+  state.lastSearchStartedAt = state.now();
+}
+
+async function enqueueSearch(state, producer) {
+  ensureRuntimeState(state);
+  const pending = state.searchQueue.length + (state.searchQueueActive ? 1 : 0);
+  if (pending >= SEARCH_QUEUE_MAX_PENDING) return { error: "search_rate_limited", status: 429 };
+
+  return new Promise((resolve, reject) => {
+    state.searchQueue.push({ producer, resolve, reject });
+    drainSearchQueue(state);
+  });
+}
+
+async function drainSearchQueue(state) {
+  if (state.searchQueueActive) return;
+  state.searchQueueActive = true;
+  try {
+    while (state.searchQueue.length > 0) {
+      const item = state.searchQueue.shift();
+      try {
+        await waitForSearchBudget(state);
+        item.resolve(await item.producer());
+      } catch (error) {
+        item.reject(error);
+      }
+    }
+  } finally {
+    state.searchQueueActive = false;
+  }
 }
 
 export async function searchPlaces(state, rawQuery) {
+  ensureRuntimeState(state);
   const query = validateSearchQuery(rawQuery);
-  if (!query) return { error: "invalid_query" };
+  if (!query) return { error: "invalid_query", status: 400 };
   const key = query.toLocaleLowerCase("ko-KR");
-  const cached = state.searchCache.get(key);
-  if (cached && Date.now() - cached.createdAt < SEARCH_CACHE_TTL_MS) return cached.value;
+  const cached = getCacheEntry(state.searchCache, key, SEARCH_CACHE_TTL_MS, state.now());
+  if (cached) return cached;
 
   return resolveSingleflight(state, `search:${key}`, async () => {
-    await waitForSearchBudget(state);
-    const payload = await fetchJson(buildNominatimSearchUrl(query), {
-      fetchImpl: state.fetchImpl,
-      headers: {
-        Accept: "application/json",
-        "Accept-Language": "ko",
-        "User-Agent": NOMINATIM_USER_AGENT,
-      },
-      timeoutMs: 8_000,
-      label: "SEARCH",
+    return enqueueSearch(state, async () => {
+      const payload = await fetchJson(buildNominatimSearchUrl(query), {
+        fetchImpl: state.fetchImpl,
+        headers: {
+          Accept: "application/json",
+          "Accept-Language": "ko",
+          "User-Agent": NOMINATIM_USER_AGENT,
+        },
+        timeoutMs: 8_000,
+        label: "SEARCH",
+      });
+      const results = Array.isArray(payload) ? payload.map(parseSearchResult).filter(Boolean) : [];
+      const value = { count: results.length, results, cachedAt: new Date().toISOString(), stale: false };
+      setLruCacheEntry(state.searchCache, key, value, SEARCH_CACHE_MAX_ENTRIES, state.now());
+      return value;
     });
-    const results = Array.isArray(payload) ? payload.map(parseSearchResult).filter(Boolean) : [];
-    const value = { count: results.length, results, cachedAt: new Date().toISOString(), stale: false };
-    state.searchCache.set(key, { createdAt: Date.now(), value });
-    return value;
   }, cached?.value);
 }
 
@@ -279,11 +371,18 @@ async function serveStatic(requestPath, response, method = "GET") {
 export function createAppServer({ environment = process.env, fetchImpl = globalThis.fetch } = {}) {
   const state = {
     cctvCache: null,
+    cctvCacheTtlMs: positiveInteger(environment.CCTV_CACHE_TTL_MS, DEFAULT_CCTV_CACHE_TTL_MS),
+    cctvMaxUpstreamRefreshes: positiveInteger(environment.CCTV_MAX_UPSTREAM_REFRESHES, DEFAULT_CCTV_MAX_UPSTREAM_REFRESHES),
+    cctvUpstreamRefreshes: 0,
     weatherCache: null,
     searchCache: new Map(),
+    searchQueue: [],
+    searchQueueActive: false,
     inflight: new Map(),
     fetchImpl,
-    lastSearchStartedAt: 0,
+    lastSearchStartedAt: null,
+    now: Date.now,
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   };
 
   const server = createServer(async (request, response) => {
@@ -297,7 +396,7 @@ export function createAppServer({ environment = process.env, fetchImpl = globalT
       }
       if (url.pathname === "/api/search") {
         const result = await searchPlaces(state, url.searchParams.get("q"));
-        if (result.error) return sendJson(response, 400, result);
+        if (result.error) return sendJson(response, result.status ?? 400, result);
         return sendJson(response, 200, result);
       }
       if (url.pathname === "/api/cctv") {
@@ -341,8 +440,10 @@ export function createAppServer({ environment = process.env, fetchImpl = globalT
       }
       if (await serveStatic(url.pathname, response, request.method)) return;
       return sendJson(response, 404, { error: "not_found" }, {}, request.method);
-    } catch {
-      return sendJson(response, 502, { error: "upstream_unavailable" }, {}, request.method);
+    } catch (error) {
+      const status = error?.status === 503 ? 503 : 502;
+      const code = status === 503 ? "upstream_budget_exhausted" : "upstream_unavailable";
+      return sendJson(response, status, { error: code }, {}, request.method);
     }
   });
   server.appState = state;

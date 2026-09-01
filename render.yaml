@@ -1,13 +1,15 @@
 services:
   - type: web
     name: map-kang88
+    repo: https://github.com/kang88xx/map-kang88
+    branch: demo/seoul-live
     runtime: node
     plan: free
     region: singapore
     buildCommand: npm ci
     startCommand: npm start
     healthCheckPath: /healthz
-    autoDeployTrigger: commit
+    autoDeployTrigger: checksPass
     envVars:
       - key: NODE_VERSION
         value: 24.20.0
@@ -17,6 +19,3 @@ services:
         sync: false
       - key: KMA_API_AUTH_KEY
         sync: false
-      - key: NGII_WMTS_API_KEY
-        sync: false
-

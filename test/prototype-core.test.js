@@ -7,8 +7,10 @@ import {
   SEARCH_ENDPOINT,
   SEOUL_BOUNDS,
   buildCctvOpenUrl,
+  buildCctvStatus,
   buildSearchUrl,
   buildShareUrl,
+  buildWeatherStatus,
   normalizeQuery,
   parseBoundingBox,
   parseSearchResult,
@@ -113,4 +115,46 @@ test("buildCctvOpenUrl opens only the same-origin camera id endpoint", () => {
 
 test("buildCctvOpenUrl rejects empty camera ids", () => {
   assert.equal(buildCctvOpenUrl("   "), null);
+});
+
+test("buildCctvStatus labels stale camera payloads as cached and delayed", () => {
+  assert.deepEqual(buildCctvStatus({ count: 7, stale: true }, 3), {
+    stale: true,
+    dotClass: "stale",
+    ariaLabel: "지연됨",
+    text: "캐시된 7개 · 공급자 응답 지연",
+    warning: "CCTV 공급자 응답이 지연되어 캐시된 위치를 표시합니다. 위성 레이어는 지도 정합 검증 중입니다.",
+  });
+});
+
+test("buildCctvStatus labels fresh camera payloads as connected", () => {
+  assert.deepEqual(buildCctvStatus({ count: 7 }, 3), {
+    stale: false,
+    dotClass: "connected",
+    ariaLabel: "연결됨",
+    text: "7개 · 확대 13 이상에서 표시",
+    warning: null,
+  });
+});
+
+test("buildWeatherStatus keeps observed time visible on stale payloads", () => {
+  assert.deepEqual(buildWeatherStatus({ stale: true }, "2026-09-01 06:00 UTC"), {
+    stale: true,
+    dotClass: "stale",
+    ariaLabel: "지연됨",
+    observedAtText: "2026-09-01 06:00 UTC · 지연됨",
+    text: "2026-09-01 06:00 UTC · 지연됨",
+    warning: "기상청 응답이 지연되어 캐시된 위성영상을 표시합니다.",
+  });
+});
+
+test("buildWeatherStatus labels fresh weather payloads as preview", () => {
+  assert.deepEqual(buildWeatherStatus({}, "2026-09-01 06:00 UTC"), {
+    stale: false,
+    dotClass: "connected",
+    ariaLabel: "연결됨",
+    observedAtText: "2026-09-01 06:00 UTC",
+    text: "2026-09-01 06:00 UTC · 미리보기",
+    warning: null,
+  });
 });
