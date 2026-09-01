@@ -1,0 +1,12 @@
+{
+  "name": "seoul-now-map-prototype",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A truthful Seoul map prototype with explicit place search and shareable view state.",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test",
+    "check": "node --test && node --check app.js && node --check bootstrap.js && node --check prototype-core.js && node --check cctv-core.js && node --check weather-core.js && node --check server.js"
+  }
+}

@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="ko" data-app-ready="false">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#101312">
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://tile.openstreetmap.org; connect-src 'self' https://nominatim.openstreetmap.org https://tile.openstreetmap.org; worker-src 'self' blob:; child-src blob:"
+  >
+  <title>서울, 지금 · 장소 검색 지도</title>
+  <meta name="description" content="서울의 장소를 검색하고 현재 지도 위치를 링크로 공유하는 지도 프로토타입">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Gowun+Dodum&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+  <link href="vendor/maplibre-gl.css" rel="stylesheet">
+  <link href="styles.css" rel="stylesheet">
+  <script src="bootstrap.js" defer></script>
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#map">지도로 건너뛰기</a>
+
+  <div class="app-shell">
+    <aside class="info-panel" id="infoPanel" aria-label="지도 정보">
+      <header class="brand-block">
+        <div class="brand-kicker">SEOUL / PROTOTYPE 01</div>
+        <h1 data-pretext>서울, 지금</h1>
+        <p data-pretext>장소를 찾고, 같은 시점의 지도 위치를 링크로 공유하세요.</p>
+      </header>
+
+      <section class="panel-section" aria-labelledby="sourceHeading">
+        <div class="section-heading">
+          <h2 id="sourceHeading">데이터 소스</h2>
+          <span class="status-pill neutral">2 / 3 연결</span>
+        </div>
+
+        <div class="layer-list" aria-label="예정된 지도 레이어">
+          <button
+            class="layer-row"
+            id="weatherLayerButton"
+            type="button"
+            aria-expanded="false"
+            disabled
+          >
+            <span class="layer-symbol weather" aria-hidden="true"></span>
+            <span class="layer-copy">
+              <strong>기상 위성</strong>
+              <small id="weatherStatusText">최신 영상을 불러오는 중</small>
+            </span>
+            <span class="status-dot" id="weatherStatusDot" aria-label="연결 중"></span>
+          </button>
+
+          <button class="layer-row" type="button" disabled>
+            <span class="layer-symbol imagery" aria-hidden="true"></span>
+            <span class="layer-copy">
+              <strong>고해상도 배경</strong>
+              <small>키·WMTS 응답 확인, 안전한 재투영 대기</small>
+            </span>
+            <span class="status-dot" aria-label="지도 정합 대기"></span>
+          </button>
+
+          <button
+            class="layer-row"
+            id="cctvLayerButton"
+            type="button"
+            aria-pressed="true"
+            disabled
+          >
+            <span class="layer-symbol traffic" aria-hidden="true"></span>
+            <span class="layer-copy">
+              <strong>교통 CCTV</strong>
+              <small id="cctvStatusText">서울 CCTV를 불러오는 중</small>
+            </span>
+            <span class="status-dot" id="cctvStatusDot" aria-label="연결 중"></span>
+          </button>
+        </div>
+      </section>
+
+      <section class="panel-section signal-note" aria-labelledby="truthHeading">
+        <span class="signal-line" aria-hidden="true"></span>
+        <div>
+          <h2 id="truthHeading">지금 보이는 것</h2>
+          <p data-pretext>OpenStreetMap 장소 검색, ITS 교통 CCTV, KMA 최신 기상위성 미리보기가 작동합니다. 국토위성 배경지도와 위성 지도 정합은 아직 진행 중입니다.</p>
+        </div>
+      </section>
+
+      <footer class="source-footer">
+        <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap contributors</a>
+        <a href="https://nominatim.org/" target="_blank" rel="noreferrer">장소 검색: Nominatim</a>
+      </footer>
+    </aside>
+
+    <main class="map-stage">
+      <div id="map" role="application" aria-label="서울 장소 검색 지도"></div>
+
+      <section class="search-stack" aria-label="장소 검색">
+        <form class="search-form" id="searchForm" role="search">
+          <label for="placeInput">서울 장소 검색</label>
+          <div class="search-control">
+            <span class="search-icon" aria-hidden="true"></span>
+            <input
+              id="placeInput"
+              name="place"
+              type="search"
+              minlength="2"
+              autocomplete="off"
+              placeholder="예: 서울역, 경복궁, 성수동"
+              aria-describedby="searchPolicy"
+            >
+            <button id="searchButton" type="submit">
+              <span class="button-label">검색</span>
+              <span class="button-spinner" aria-hidden="true"></span>
+            </button>
+          </div>
+          <p id="searchPolicy">입력 중에는 요청하지 않고 Enter 또는 검색 버튼을 누를 때만 검색합니다.</p>
+          <a
+            class="search-provider"
+            href="https://nominatim.org/"
+            target="_blank"
+            rel="noreferrer"
+          >장소 검색 © OpenStreetMap contributors · Nominatim</a>
+        </form>
+
+        <div class="search-status" id="searchStatus" aria-live="polite"></div>
+        <div class="search-results" id="searchResults" role="listbox" aria-label="장소 검색 결과" hidden></div>
+      </section>
+
+      <section class="map-hud" aria-label="현재 지도 상태">
+        <div>
+          <span id="areaLabel">서울</span>
+          <strong id="zoomLabel">z12</strong>
+        </div>
+        <div class="hud-coordinates" id="coordinateLabel">37.5665 / 126.9780</div>
+        <button class="share-button" id="shareButton" type="button">링크 복사</button>
+      </section>
+
+      <div class="map-loading" id="mapLoading" role="status">
+        <span></span>
+        <p>서울 지도를 불러오는 중</p>
+      </div>
+
+      <div class="source-warning" id="sourceWarning">
+        <span class="warning-mark" aria-hidden="true">!</span>
+        <span id="sourceWarningText">위성 레이어는 지도 정합·이용조건 검증 후 표시합니다.</span>
+      </div>
+
+      <aside class="camera-panel" id="cameraPanel" aria-labelledby="cameraName" hidden>
+        <button class="camera-close" id="cameraCloseButton" type="button" aria-label="CCTV 정보 닫기">×</button>
+        <div class="camera-kicker">ITS TRAFFIC CCTV</div>
+        <h2 id="cameraName"></h2>
+        <div class="camera-meta">
+          <span id="cameraFormat"></span>
+          <span id="cameraObservedAt"></span>
+        </div>
+        <button class="camera-open" id="cameraOpenButton" type="button">공식 CCTV 영상 열기</button>
+        <p id="cameraSource"></p>
+        <small>영상은 원 제공처에서 직접 열리며 이 서버는 영상 바이트를 저장하거나 중계하지 않습니다.</small>
+      </aside>
+
+      <aside class="weather-panel" id="weatherPanel" aria-labelledby="weatherPanelTitle" hidden>
+        <button class="camera-close" id="weatherCloseButton" type="button" aria-label="기상위성 정보 닫기">×</button>
+        <div class="camera-kicker">KMA GK2A / IR105</div>
+        <h2 id="weatherPanelTitle">한반도 최신 적외 영상</h2>
+        <div class="camera-meta">
+          <span id="weatherObservedAt"></span>
+          <span>900 × 922 PNG</span>
+        </div>
+        <div class="weather-image-wrap">
+          <img id="weatherImage" alt="천리안 2A 한반도 최신 적외 위성영상">
+        </div>
+        <p>기상청 API Hub 원본 이미지입니다.</p>
+        <small>현재는 관측 미리보기이며, 공식 네 모서리·투영 계약을 확인하기 전에는 지도 위에 임의로 겹치지 않습니다.</small>
+      </aside>
+
+
+      <button
+        class="sheet-toggle"
+        id="sheetToggle"
+        type="button"
+        aria-controls="infoPanel"
+        aria-expanded="false"
+      >
+        <span>데이터 상태</span>
+        <span class="sheet-chevron" aria-hidden="true"></span>
+      </button>
+
+      <div class="app-alert" id="appAlert" role="alert" hidden></div>
+    </main>
+  </div>
+
+  <noscript>이 프로토타입은 장소 검색과 지도 이동을 위해 JavaScript가 필요합니다.</noscript>
+</body>
+</html>
