@@ -582,10 +582,10 @@ a:focus-visible {
   .panel-section { padding: 16px 0; }
   .source-footer { padding-top: 14px; }
   .sheet-toggle {
-    position: fixed;
-    right: 30px;
-    bottom: 78px;
-    z-index: 25;
+    position: absolute;
+    top: 8px;
+    right: 18px;
+    z-index: 1;
     display: flex;
     align-items: center;
     justify-content: space-between;

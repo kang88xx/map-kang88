@@ -23,6 +23,17 @@
 
   <div class="app-shell">
     <aside class="info-panel" id="infoPanel" aria-label="지도 정보">
+      <button
+        class="sheet-toggle"
+        id="sheetToggle"
+        type="button"
+        aria-controls="infoPanel"
+        aria-expanded="false"
+      >
+        <span>데이터 상태</span>
+        <span class="sheet-chevron" aria-hidden="true"></span>
+      </button>
+
       <header class="brand-block">
         <div class="brand-kicker">SEOUL / PROTOTYPE 01</div>
         <h1 data-pretext>서울, 지금</h1>
@@ -171,19 +182,6 @@
         <p>기상청 API Hub 원본 이미지입니다.</p>
         <small>현재는 관측 미리보기이며, 공식 네 모서리·투영 계약을 확인하기 전에는 지도 위에 임의로 겹치지 않습니다.</small>
       </aside>
-
-
-      <button
-        class="sheet-toggle"
-        id="sheetToggle"
-        type="button"
-        aria-controls="infoPanel"
-        aria-expanded="false"
-      >
-        <span>데이터 상태</span>
-        <span class="sheet-chevron" aria-hidden="true"></span>
-      </button>
-
       <div class="app-alert" id="appAlert" role="alert" hidden></div>
     </main>
   </div>
