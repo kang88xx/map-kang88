@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -8,6 +9,7 @@ import { normalizeQuery, parseSearchResult, SEOUL_BOUNDS } from "./prototype-cor
 import { findLatestKmaTimestamp, readPngDimensions } from "./weather-core.js";
 
 const ROOT = fileURLToPath(new URL(".", import.meta.url));
+const CCTV_FALLBACK_PATH = join(ROOT, "data", "cctv-fallback.json");
 const DEFAULT_PORT = 4173;
 const DEFAULT_HOST = process.env.NODE_ENV === "production" ? "0.0.0.0" : "127.0.0.1";
 const ITS_ENDPOINT = "https://openapi.its.go.kr:9443/cctvInfo";
@@ -58,6 +60,80 @@ export async function loadEnvironment() {
 export function publicCamera(camera) {
   const { mediaUrl, ...publicFields } = camera;
   return publicFields;
+}
+
+export function normalizeCctvFallback(payload) {
+  if (payload?.schemaVersion !== 1 || !Array.isArray(payload?.cameras)) return null;
+  const normalized = normalizeItsPayload({
+    response: {
+      coordtype: "WGS84",
+      data: payload.cameras.map((camera) => ({
+        cctvname: camera?.name,
+        coordx: camera?.longitude,
+        coordy: camera?.latitude,
+        cctvurl: camera?.mediaUrl,
+        cctvformat: camera?.format,
+        cctvresolution: camera?.resolution,
+        filecreatetime: camera?.observedAt,
+      })),
+    },
+  });
+  if (!normalized.count) return null;
+  return {
+    ...normalized,
+    capturedAt: typeof payload.capturedAt === "string" ? payload.capturedAt : null,
+  };
+}
+
+export function encryptCctvFallback(cameras, apiKey) {
+  if (!apiKey || !Array.isArray(cameras) || !cameras.length) throw new Error("CCTV_FALLBACK_ENCRYPTION_INPUT_INVALID");
+  const salt = randomBytes(16);
+  const iv = randomBytes(12);
+  const key = scryptSync(apiKey, salt, 32);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const plaintext = Buffer.from(JSON.stringify({ cameras }), "utf8");
+  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  return {
+    algorithm: "aes-256-gcm",
+    kdf: "scrypt",
+    salt: salt.toString("base64"),
+    iv: iv.toString("base64"),
+    authTag: cipher.getAuthTag().toString("base64"),
+    ciphertext: ciphertext.toString("base64"),
+  };
+}
+
+export function decryptCctvFallback(payload, apiKey) {
+  try {
+    if (payload?.schemaVersion !== 2 || !apiKey) return null;
+    const encryption = payload.encryption;
+    if (encryption?.algorithm !== "aes-256-gcm" || encryption?.kdf !== "scrypt") return null;
+    const salt = Buffer.from(encryption.salt, "base64");
+    const iv = Buffer.from(encryption.iv, "base64");
+    const authTag = Buffer.from(encryption.authTag, "base64");
+    const ciphertext = Buffer.from(encryption.ciphertext, "base64");
+    if (salt.length !== 16 || iv.length !== 12 || authTag.length !== 16 || !ciphertext.length) return null;
+    const key = scryptSync(apiKey, salt, 32);
+    const decipher = createDecipheriv("aes-256-gcm", key, iv);
+    decipher.setAuthTag(authTag);
+    const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+    const decrypted = JSON.parse(plaintext.toString("utf8"));
+    return normalizeCctvFallback({
+      schemaVersion: 1,
+      capturedAt: payload.capturedAt,
+      cameras: decrypted.cameras,
+    });
+  } catch {
+    return null;
+  }
+}
+
+export async function loadCctvFallback(apiKey) {
+  try {
+    return decryptCctvFallback(JSON.parse(await readFile(CCTV_FALLBACK_PATH, "utf8")), apiKey);
+  } catch {
+    return null;
+  }
 }
 
 export function getAppServerStats(server) {
@@ -218,6 +294,25 @@ function setLruCacheEntry(cache, key, value, maxEntries, now) {
 
 async function fetchCameras(state, apiKey) {
   if (state.cctvCache && Date.now() - state.cctvCache.createdAt < state.cctvCacheTtlMs) return state.cctvCache.value;
+  if (state.preferCctvFallback) {
+    state.cctvFallback ??= await state.cctvFallbackLoader();
+    if (!state.cctvFallback) {
+      const error = new Error("CCTV_FALLBACK_UNAVAILABLE");
+      error.status = 503;
+      error.publicCode = "cctv_fallback_unavailable";
+      throw error;
+    }
+    const value = {
+      ...state.cctvFallback,
+      attribution: "국토교통부 국가교통정보센터",
+      cachedAt: state.cctvFallback.capturedAt,
+      stale: true,
+      warning: "official_snapshot_fallback",
+      sourceMode: "official_snapshot",
+    };
+    state.cctvCache = { createdAt: Date.now(), value };
+    return value;
+  }
   if (state.cctvUpstreamRefreshes >= state.cctvMaxUpstreamRefreshes) {
     if (state.cctvCache) return { ...state.cctvCache.value, stale: true, warning: "refresh_budget_exhausted" };
     const error = new Error("CCTV_REFRESH_BUDGET_EXHAUSTED");
@@ -391,13 +486,20 @@ async function serveStatic(requestPath, response, method = "GET") {
   return true;
 }
 
-export function createAppServer({ environment = process.env, fetchImpl = globalThis.fetch } = {}) {
+export function createAppServer({
+  environment = process.env,
+  fetchImpl = globalThis.fetch,
+  cctvFallbackLoader,
+} = {}) {
   const state = {
     cctvCache: null,
     cctvCacheTtlMs: positiveInteger(environment.CCTV_CACHE_TTL_MS, DEFAULT_CCTV_CACHE_TTL_MS),
     cctvMaxUpstreamRefreshes: positiveInteger(environment.CCTV_MAX_UPSTREAM_REFRESHES, DEFAULT_CCTV_MAX_UPSTREAM_REFRESHES),
     cctvRequestTimeoutMs: positiveInteger(environment.CCTV_REQUEST_TIMEOUT_MS, DEFAULT_CCTV_REQUEST_TIMEOUT_MS),
     cctvUpstreamRefreshes: 0,
+    cctvFallback: null,
+    cctvFallbackLoader: cctvFallbackLoader ?? (() => loadCctvFallback(environment.ITS_CCTV_API_KEY)),
+    preferCctvFallback: String(environment.RENDER).toLowerCase() === "true",
     weatherCache: null,
     searchCache: new Map(),
     searchQueue: [],
@@ -468,7 +570,7 @@ export function createAppServer({ environment = process.env, fetchImpl = globalT
       return sendJson(response, 404, { error: "not_found" }, {}, request.method);
     } catch (error) {
       const status = error?.status === 503 ? 503 : 502;
-      const code = status === 503 ? "upstream_budget_exhausted" : "upstream_unavailable";
+      const code = error?.publicCode || (status === 503 ? "upstream_budget_exhausted" : "upstream_unavailable");
       const body = { error: code };
       if (status === 502 && requestPath.startsWith("/api/cctv")) {
         body.reason = classifyUpstreamError(error);

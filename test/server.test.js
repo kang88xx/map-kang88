@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
   buildNominatimSearchUrl,
   classifyUpstreamError,
   createAppServer,
+  decryptCctvFallback,
+  encryptCctvFallback,
   getAppServerStats,
+  normalizeCctvFallback,
   publicCamera,
   searchPlaces,
 } from "../server.js";
@@ -280,6 +284,89 @@ test("cctv route exposes only a safe upstream failure class", async () => {
   const response = await requestServer(server, "/api/cctv");
   assert.equal(response.status, 502);
   assert.deepEqual(await response.json(), { error: "upstream_unavailable", reason: "timeout" });
+});
+
+test("Render serves the verified CCTV fallback without calling the blocked upstream", async () => {
+  let fetchCalls = 0;
+  const fallback = normalizeCctvFallback({
+    schemaVersion: 1,
+    capturedAt: "2026-09-02T00:30:00.000Z",
+    cameras: [{
+      name: "서울역",
+      longitude: 126.9707,
+      latitude: 37.5547,
+      mediaUrl: "https://cctvsec.ktict.co.kr/live.m3u8",
+      format: "HLS",
+      resolution: null,
+      observedAt: null,
+    }],
+  });
+  const server = createAppServer({
+    environment: { ITS_CCTV_API_KEY: "test-key", RENDER: "true" },
+    cctvFallbackLoader: async () => fallback,
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error("Render must not call the blocked ITS endpoint");
+    },
+  });
+
+  const response = await requestServer(server, "/api/cctv");
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(body.count, 1);
+  assert.equal(body.stale, true);
+  assert.equal(body.sourceMode, "official_snapshot");
+  assert.equal(body.warning, "official_snapshot_fallback");
+  assert.equal(body.cameras[0].mediaUrl, undefined);
+  assert.equal(fetchCalls, 0);
+});
+
+test("CCTV fallback encryption round-trips only with the server key", () => {
+  const clearFallback = {
+    schemaVersion: 1,
+    capturedAt: "2026-09-02T00:30:00.000Z",
+    cameras: [{
+      name: "서울역",
+      longitude: 126.9707,
+      latitude: 37.5547,
+      mediaUrl: "https://cctvsec.ktict.co.kr/private-locator",
+      format: "HLS",
+    }],
+  };
+  const encrypted = {
+    schemaVersion: 2,
+    capturedAt: clearFallback.capturedAt,
+    encryption: encryptCctvFallback(clearFallback.cameras, "server-key"),
+  };
+
+  assert.equal(JSON.stringify(encrypted).includes("private-locator"), false);
+  assert.equal(decryptCctvFallback(encrypted, "wrong-key"), null);
+  assert.equal(decryptCctvFallback(encrypted, "server-key").count, 1);
+});
+
+test("tracked CCTV fallback contains ciphertext instead of provider locators", async () => {
+  const trackedFallback = await readFile(new URL("../data/cctv-fallback.json", import.meta.url), "utf8");
+  assert.doesNotMatch(trackedFallback, /mediaUrl|cctvsec\.ktict\.co\.kr|https:\/\//);
+  const payload = JSON.parse(trackedFallback);
+  assert.equal(payload.schemaVersion, 2);
+  assert.equal(typeof payload.encryption?.ciphertext, "string");
+});
+
+test("Render fails fast when the encrypted fallback is missing or invalid", async () => {
+  let fetchCalls = 0;
+  const server = createAppServer({
+    environment: { ITS_CCTV_API_KEY: "test-key", RENDER: "true" },
+    cctvFallbackLoader: async () => null,
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error("blocked upstream must not be attempted");
+    },
+  });
+
+  const response = await requestServer(server, "/api/cctv");
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { error: "cctv_fallback_unavailable" });
+  assert.equal(fetchCalls, 0);
 });
 
 test("classifyUpstreamError never returns arbitrary error text", () => {

@@ -24,6 +24,8 @@ Render에서는 GitHub의 demo 브랜치로 Blueprint를 만들고 두 환경변
 
 외부 공개 데모에는 ITS `1,000건(운영용)` 키를 사용합니다. 현재 서버는 개발 키 보호를 위해 CCTV를 60분 캐시하고 프로세스당 upstream 갱신을 90회로 제한하지만, 이 제한은 재시작 시 초기화되므로 `100건(개발용)` 키로 상시 공개하면 안 됩니다.
 
+Render의 해외 리전에서는 ITS 목록 API의 `9443` 연결이 시간 초과됩니다. 공개 데모는 2026-09-02에 공식 API로 검증한 서울 CCTV 위치와 HTTPS HLS 주소를 암호화된 서버 스냅샷으로 사용하며, 화면에 캐시 데이터임을 표시합니다. HLS 주소는 Git에 평문으로 저장하지 않고 Render에 등록된 ITS 키로 실행 중에만 복호화합니다. 키를 바꾸면 같은 키로 `ITS_CCTV_API_KEY=... node scripts/refresh-cctv-fallback.mjs <response.json>`을 실행해 스냅샷도 다시 생성해야 합니다.
+
 ## 검증
 
 ```bash
