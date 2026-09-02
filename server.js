@@ -141,6 +141,23 @@ async function fetchJson(url, { fetchImpl, headers = {}, timeoutMs = 15_000, lab
   return JSON.parse(buffer.toString("utf8"));
 }
 
+export function classifyUpstreamError(error) {
+  const message = String(error?.message || "");
+  const causeCode = String(error?.cause?.code || error?.code || "").toUpperCase();
+  const httpMatch = message.match(/^ITS_HTTP_(\d{3})$/);
+
+  if (httpMatch) return `http_${httpMatch[1]}`;
+  if (error?.name === "TimeoutError" || causeCode.includes("TIMEOUT")) return "timeout";
+  if (["ECONNREFUSED", "ECONNRESET", "ENETUNREACH", "EHOSTUNREACH"].includes(causeCode)) {
+    return causeCode.toLowerCase();
+  }
+  if (message === "ITS_BAD_CONTENT_TYPE") return "bad_content_type";
+  if (message === "ITS_TOO_LARGE") return "response_too_large";
+  if (error instanceof SyntaxError) return "invalid_json";
+  if (message === "fetch failed") return "network_error";
+  return "unknown";
+}
+
 async function fetchPng(url, { fetchImpl, timeoutMs = 15_000, label }) {
   const response = await fetchImpl(url, { redirect: "error", signal: AbortSignal.timeout(timeoutMs) });
   if (!response.ok) throw new Error(`${label}_HTTP_${response.status}`);
@@ -386,8 +403,10 @@ export function createAppServer({ environment = process.env, fetchImpl = globalT
   };
 
   const server = createServer(async (request, response) => {
+    let requestPath = "";
     try {
       const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
+      requestPath = url.pathname;
       if (!["GET", "HEAD"].includes(request.method)) {
         return sendJson(response, 405, { error: "method_not_allowed" }, {}, request.method);
       }
@@ -443,7 +462,11 @@ export function createAppServer({ environment = process.env, fetchImpl = globalT
     } catch (error) {
       const status = error?.status === 503 ? 503 : 502;
       const code = status === 503 ? "upstream_budget_exhausted" : "upstream_unavailable";
-      return sendJson(response, status, { error: code }, {}, request.method);
+      const body = { error: code };
+      if (status === 502 && requestPath.startsWith("/api/cctv")) {
+        body.reason = classifyUpstreamError(error);
+      }
+      return sendJson(response, status, body, {}, request.method);
     }
   });
   server.appState = state;

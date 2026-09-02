@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildNominatimSearchUrl, createAppServer, getAppServerStats, publicCamera, searchPlaces } from "../server.js";
+import {
+  buildNominatimSearchUrl,
+  classifyUpstreamError,
+  createAppServer,
+  getAppServerStats,
+  publicCamera,
+  searchPlaces,
+} from "../server.js";
 
 function requestServer(server, path, { method = "GET" } = {}) {
   return new Promise((resolve) => {
@@ -258,4 +265,23 @@ test("cctv refresh budget returns 503 without cache and never calls upstream", a
   assert.equal(response.status, 503);
   assert.deepEqual(await response.json(), { error: "upstream_budget_exhausted" });
   assert.equal(fetchCalls, 0);
+});
+
+test("cctv route exposes only a safe upstream failure class", async () => {
+  const upstreamError = new TypeError("fetch failed", {
+    cause: Object.assign(new Error("private connection details"), { code: "UND_ERR_CONNECT_TIMEOUT" }),
+  });
+  const server = createAppServer({
+    environment: { ITS_CCTV_API_KEY: "test-key" },
+    fetchImpl: async () => { throw upstreamError; },
+  });
+
+  const response = await requestServer(server, "/api/cctv");
+  assert.equal(response.status, 502);
+  assert.deepEqual(await response.json(), { error: "upstream_unavailable", reason: "timeout" });
+});
+
+test("classifyUpstreamError never returns arbitrary error text", () => {
+  assert.equal(classifyUpstreamError(new Error("secret-bearing upstream text")), "unknown");
+  assert.equal(classifyUpstreamError(new Error("ITS_HTTP_403")), "http_403");
 });
