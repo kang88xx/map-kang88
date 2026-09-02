@@ -244,6 +244,7 @@ test("cctv refresh budget serves stale cache without extra upstream calls", asyn
     cctvMaxUpstreamRefreshes: 1,
     cctvRefreshBudgetScope: "process",
     cctvCacheTtlMs: 1,
+    cctvRequestTimeoutMs: 35_000,
   });
 });
 

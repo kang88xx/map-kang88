@@ -15,6 +15,7 @@ const NOMINATIM_ENDPOINT = "https://nominatim.openstreetmap.org/search";
 const NOMINATIM_USER_AGENT = "map.kang88.io seoul-now-map-prototype/0.1 (https://map.kang88.io)";
 const DEFAULT_CCTV_CACHE_TTL_MS = 60 * 60_000;
 const DEFAULT_CCTV_MAX_UPSTREAM_REFRESHES = 90;
+const DEFAULT_CCTV_REQUEST_TIMEOUT_MS = 35_000;
 const SEARCH_CACHE_TTL_MS = 60 * 60_000;
 const SEARCH_INTERVAL_MS = 1_100;
 const SEARCH_CACHE_MAX_ENTRIES = 100;
@@ -63,6 +64,7 @@ export function getAppServerStats(server) {
   return {
     cctvUpstreamRefreshes: server.appState?.cctvUpstreamRefreshes ?? 0,
     cctvMaxUpstreamRefreshes: server.appState?.cctvMaxUpstreamRefreshes ?? DEFAULT_CCTV_MAX_UPSTREAM_REFRESHES,
+    cctvRequestTimeoutMs: server.appState?.cctvRequestTimeoutMs ?? DEFAULT_CCTV_REQUEST_TIMEOUT_MS,
     cctvRefreshBudgetScope: "process",
     cctvCacheTtlMs: server.appState?.cctvCacheTtlMs ?? DEFAULT_CCTV_CACHE_TTL_MS,
   };
@@ -240,7 +242,11 @@ async function fetchCameras(state, apiKey) {
     url.searchParams.set("maxY", String(CCTV_BOUNDS.north));
     url.searchParams.set("getType", "json");
 
-    const normalized = normalizeItsPayload(await fetchJson(url, { fetchImpl: state.fetchImpl, label: "ITS" }));
+    const normalized = normalizeItsPayload(await fetchJson(url, {
+      fetchImpl: state.fetchImpl,
+      label: "ITS",
+      timeoutMs: state.cctvRequestTimeoutMs,
+    }));
     const value = {
       ...normalized,
       attribution: "국토교통부 국가교통정보센터",
@@ -390,6 +396,7 @@ export function createAppServer({ environment = process.env, fetchImpl = globalT
     cctvCache: null,
     cctvCacheTtlMs: positiveInteger(environment.CCTV_CACHE_TTL_MS, DEFAULT_CCTV_CACHE_TTL_MS),
     cctvMaxUpstreamRefreshes: positiveInteger(environment.CCTV_MAX_UPSTREAM_REFRESHES, DEFAULT_CCTV_MAX_UPSTREAM_REFRESHES),
+    cctvRequestTimeoutMs: positiveInteger(environment.CCTV_REQUEST_TIMEOUT_MS, DEFAULT_CCTV_REQUEST_TIMEOUT_MS),
     cctvUpstreamRefreshes: 0,
     weatherCache: null,
     searchCache: new Map(),
